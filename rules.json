@@ -1,0 +1,103 @@
+[
+  {
+    "id": 1,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "requestDomains": [
+        "doubleclick.net",
+        "googlesyndication.com",
+        "googleadservices.com",
+        "adservice.google.com",
+        "googletagservices.com",
+        "pagead2.googlesyndication.com",
+        "amazon-adsystem.com",
+        "adnxs.com",
+        "adsrvr.org",
+        "rubiconproject.com",
+        "pubmatic.com",
+        "openx.net",
+        "criteo.com",
+        "criteo.net",
+        "taboola.com",
+        "outbrain.com",
+        "mgid.com",
+        "revcontent.com",
+        "smartadserver.com",
+        "adform.net",
+        "casalemedia.com",
+        "indexww.com",
+        "33across.com",
+        "sharethrough.com",
+        "triplelift.com",
+        "media.net",
+        "yieldmo.com",
+        "teads.tv",
+        "adcolony.com",
+        "popads.net",
+        "popcash.net",
+        "propellerads.com",
+        "exoclick.com",
+        "adsterra.com",
+        "zedo.com",
+        "bidswitch.net",
+        "contextweb.com",
+        "lijit.com",
+        "sovrn.com",
+        "gumgum.com",
+        "adskeeper.com",
+        "advertising.com",
+        "ads.yahoo.com",
+        "ads.linkedin.com",
+        "ads-twitter.com",
+        "static.ads-twitter.com"
+      ],
+      "excludedResourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 2,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "requestDomains": [
+        "scorecardresearch.com",
+        "quantserve.com",
+        "moatads.com",
+        "hotjar.com",
+        "mouseflow.com",
+        "crazyegg.com",
+        "chartbeat.com",
+        "newrelic.com",
+        "nr-data.net",
+        "bluekai.com",
+        "krxd.net",
+        "demdex.net",
+        "everesttech.net",
+        "omtrdc.net",
+        "adsafeprotected.com",
+        "doubleverify.com",
+        "rlcdn.com",
+        "tapad.com",
+        "agkn.com",
+        "mathtag.com",
+        "serving-sys.com",
+        "eyeota.net",
+        "exelator.com",
+        "connect.facebook.net",
+        "analytics.tiktok.com"
+      ],
+      "excludedResourceTypes": ["main_frame"]
+    }
+  },
+  {
+    "id": 3,
+    "priority": 1,
+    "action": { "type": "block" },
+    "condition": {
+      "requestDomains": ["imasdk.googleapis.com", "pubads.g.doubleclick.net"],
+      "initiatorDomains": ["kick.com"],
+      "excludedResourceTypes": ["main_frame"]
+    }
+  }
+]
