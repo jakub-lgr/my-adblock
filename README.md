@@ -38,7 +38,7 @@ It works great **alongside** a big list-based blocker (like AdBlock or uBlock Or
 
 1. Download this repository (**Code → Download ZIP**, then unzip) or clone it:
    ```bash
-   git clone https://github.com/Cukrovec/my-adblock.git
+   git clone https://github.com/jakub-lgr/my-adblock.git
    ```
 2. Open `chrome://extensions` in Chrome.
 3. Turn on **Developer mode** (top right).
