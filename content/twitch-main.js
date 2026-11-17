@@ -18,7 +18,7 @@
   // ---------------------------------------------------------------------
   function workerPatch() {
     const CLIENT_ID = "kimne78kx3ncx6brgo4mv6wki5h1ko"; // Twitch website's public client id
-    const BACKUP_PLAYER_TYPES = ["embed", "popout", "autoplay"];
+    const BACKUP_PLAYER_TYPES = ["embed", "popout", "picture-by-picture", "autoplay"];
     const AD_MARKERS = ["stitched-ad", "X-TV-TWITCH-AD", "twitch-stitched-ad", "twitch-maf-ad", "twitch-ad-quartile"];
     const TOKEN_QUERY =
       'query PlaybackAccessToken_Template($login: String!, $isLive: Boolean!, $vodID: ID!, $isVod: Boolean!, $playerType: String!) {' +
@@ -32,6 +32,8 @@
 
     const urlOf = (input) => (typeof input === "string" ? input : input instanceof URL ? input.href : input && input.url) || "";
     const hasAds = (text) => AD_MARKERS.some((m) => text.includes(m));
+    // Shown in DevTools console only during ad breaks; filter by "My AdBlock".
+    const log = (...args) => console.info("[My AdBlock Twitch]", ...args);
 
     // A separate channel, so Twitch's player never sees our messages.
     let channel = null;
@@ -55,108 +57,136 @@
     }
 
     // Remove ad segments: Twitch marks real stream segments with ",live".
+    // Returns null when nothing would be left: an empty live playlist makes
+    // the Twitch player think the stream ended and show "offline".
     function stripAds(text) {
       const lines = text.split("\n");
       const out = [];
+      let kept = 0;
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i];
-        if (line.startsWith("#EXTINF") && !line.includes(",live")) {
-          i++; // also skip the segment URL on the next line
-          continue;
+        if (line.startsWith("#EXTINF")) {
+          if (!line.includes(",live")) {
+            i++; // also skip the segment URL on the next line
+            continue;
+          }
+          kept++;
         }
         if (line.startsWith("#EXT-X-TWITCH-PREFETCH")) continue; // prefetch may be an ad
         if (line.startsWith("#EXT-X-DATERANGE") && hasAds(line)) continue;
         out.push(line);
       }
-      return out.join("\n");
+      return kept > 0 ? out.join("\n") : null;
     }
+
+    // Headers the Twitch website sends with its own GQL requests (device id,
+    // integrity token...). Without them Twitch often refuses or ad-loads the
+    // backup tokens. The page script sends them over the channel.
+    let pageHeaders = {};
+    if (channel) channel.onmessage = (msg) => {
+      const d = msg.data;
+      if (d && d.type === "gql-headers" && d.headers) pageHeaders = { ...pageHeaders, ...d.headers };
+    };
 
     async function getToken(channel, playerType) {
       const res = await realFetch("https://gql.twitch.tv/gql", {
         method: "POST",
-        headers: { "Client-ID": CLIENT_ID, "Content-Type": "application/json" },
+        headers: { ...pageHeaders, "Client-ID": CLIENT_ID, "Content-Type": "application/json" },
         body: JSON.stringify({
           operationName: "PlaybackAccessToken_Template",
           query: TOKEN_QUERY,
           variables: { isLive: true, login: channel, isVod: false, vodID: "", playerType }
         })
       });
-      if (!res.ok) return null;
+      if (!res.ok) { log(playerType, "token HTTP", res.status); return null; }
       const json = await res.json();
+      if (json && json.errors) log(playerType, "token errors", JSON.stringify(json.errors));
       return json && json.data && json.data.streamPlaybackAccessToken;
     }
 
     async function getBackupMediaUrl(info, playerType) {
       const token = await getToken(info.channel, playerType);
-      if (!token) return null;
-      const params = new URLSearchParams({
-        allow_source: "true",
-        fast_bread: "true",
-        p: String(Math.floor(Math.random() * 1e7)),
-        player_backend: "mediaplayer",
-        playlist_include_framerate: "true",
-        reassignments_supported: "true",
-        supported_codecs: "avc1",
-        sig: token.signature,
-        token: token.value
-      });
-      const res = await realFetch(`https://usher.ttvnw.net/api/channel/hls/${info.channel}.m3u8?${params}`);
-      if (!res.ok) return null;
+      if (!token) { log(playerType, "no token"); return null; }
+      // Same request the player made (same API path and parameters), only
+      // with the backup token.
+      const backup = new URL(info.masterUrl);
+      backup.searchParams.set("sig", token.signature);
+      backup.searchParams.set("token", token.value);
+      backup.searchParams.set("p", String(Math.floor(Math.random() * 1e7)));
+      backup.searchParams.delete("play_session_id");
+      const res = await realFetch(backup.href);
+      if (!res.ok) { log(playerType, "master playlist HTTP", res.status); return null; }
       const streams = parseMaster(await res.text());
-      if (!streams.length) return null;
+      if (!streams.length) { log(playerType, "master playlist has no streams"); return null; }
       // Same quality as the user picked, otherwise the closest one.
       const same = streams.find((s) => s.resolution === info.resolution && Math.round(s.frameRate) === Math.round(info.frameRate))
         || streams.find((s) => s.resolution === info.resolution);
       return (same || streams[0]).url;
     }
 
-    async function tryPlaylist(url) {
+    // A backup media playlist without ads. If it has ads but also real
+    // stream segments, those segments are good enough too.
+    async function tryPlaylist(url, label) {
       try {
         const res = await realFetch(url);
-        if (!res.ok) return null;
+        if (!res.ok) { log(label, "media playlist HTTP", res.status); return null; }
         const text = await res.text();
-        return hasAds(text) ? null : text;
+        if (!hasAds(text)) return text;
+        const stripped = stripAds(text);
+        log(label, stripped ? "has ads, using its live segments" : "has ads too");
+        return stripped;
       } catch (e) {
+        log(label, "failed", String(e));
         return null;
       }
     }
 
     async function replaceAdPlaylist(url, text) {
       const info = mediaInfo.get(url);
+      if (!info) log("unknown media playlist, no backup possible:", url.split("?")[0]);
       if (info) {
         // Re-use the backup stream we found last time while the ad break lasts.
         if (info.backupUrl) {
-          const clean = await tryPlaylist(info.backupUrl);
+          const clean = await tryPlaylist(info.backupUrl, "previous backup");
           if (clean) return clean;
         }
         for (const type of BACKUP_PLAYER_TYPES) {
           try {
             const backupUrl = await getBackupMediaUrl(info, type);
             if (!backupUrl) continue;
-            const clean = await tryPlaylist(backupUrl);
+            const clean = await tryPlaylist(backupUrl, type);
             if (clean) {
+              log(type, "OK, ad replaced");
               info.backupUrl = backupUrl;
               return clean;
             }
-          } catch (e) {}
+          } catch (e) {
+            log(type, "failed", String(e));
+          }
         }
       }
-      return stripAds(text);
+      const stripped = stripAds(text);
+      if (stripped) return stripped;
+      // The whole playlist is ads (typically a pre-roll) and no clean backup
+      // was found. Let the ad play rather than break the stream.
+      log("no clean stream found, letting the ad play");
+      notify("ad-shown");
+      return text;
     }
 
     self.fetch = async function (input, init) {
       const url = urlOf(input);
 
       // Master playlist: remember which media playlists belong to which channel.
-      if (url.includes("usher.ttvnw.net/api/channel/hls/")) {
+      // Twitch uses both /api/channel/hls/ and /api/v2/channel/hls/.
+      const master = url.match(/usher\.ttvnw\.net\/api\/(?:v\d+\/)?channel\/hls\/([^/.?]+)\.m3u8/);
+      if (master) {
         const res = await realFetch(input, init);
         if (res.status !== 200) return res;
         const text = await res.text();
-        const channel = (url.match(/\/hls\/([^/.?]+)\.m3u8/) || [])[1];
-        if (channel) {
-          for (const s of parseMaster(text)) {
-            mediaInfo.set(s.url, { channel: channel.toLowerCase(), resolution: s.resolution, frameRate: s.frameRate });
-          }
+        const channel = master[1].toLowerCase();
+        for (const s of parseMaster(text)) {
+          mediaInfo.set(s.url, { channel, masterUrl: url, resolution: s.resolution, frameRate: s.frameRate });
         }
         return new Response(text, { status: res.status, statusText: res.statusText, headers: res.headers });
       }
@@ -225,8 +255,33 @@
   let banner = null;
   let channel = null;
   try { channel = new BroadcastChannel("my-adblock-twitch"); } catch (e) {}
+
+  // Copy the headers Twitch's own GQL requests carry, for the worker's backup
+  // token requests. Only these names; the login token is never copied.
+  const COPY_HEADERS = ["device-id", "x-device-id", "client-integrity", "client-session-id", "client-version"];
+  function captureHeaders(input, init) {
+    try {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input && input.url;
+      if (!url || !url.includes("gql.twitch.tv")) return;
+      const all = new Headers(input instanceof Request ? input.headers : undefined);
+      new Headers((init && init.headers) || undefined).forEach((v, k) => all.set(k, v));
+      const found = {};
+      for (const name of COPY_HEADERS) if (all.get(name)) found[name] = all.get(name);
+      // Sent every time (they are tiny), so a newly created player worker
+      // gets them too, e.g. after switching channels.
+      if (Object.keys(found).length && channel) channel.postMessage({ type: "gql-headers", headers: found });
+    } catch (e) {}
+  }
+  const realFetch = window.fetch;
+  window.fetch = function (input, init) {
+    captureHeaders(input, init);
+    return realFetch.apply(this, arguments);
+  };
+
   if (channel) channel.onmessage = (msg) => {
     const e = { detail: msg.data };
+    if (typeof e.detail !== "string") return;
+    if (e.detail === "ad-shown") e.detail = "ad-end"; // ad is playing: no "skipping" note
     const container = document.querySelector(".video-player__container") || document.querySelector("[data-a-target='video-player']");
     if (e.detail === "ad-start" && container && !banner) {
       banner = document.createElement("div");
